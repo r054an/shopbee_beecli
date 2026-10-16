@@ -1,3 +1,7 @@
+<div align="center"><img width="300" height="150" alt="Bee Rounded@2x" src="https://github.com/user-attachments/assets/d24ad62a-aad7-487a-a634-efde561194fe" />
+<img width="300" height="150" alt="logo" src="logo.jpg" />
+</div>
+
 # ShopBee — "You said you needed it. Bee remembers."
 
 A **Bee Skill** for Amazon Shopping that detects shopping intent from your conversations and adds items to your cart via Alexa Shopping Actions.
