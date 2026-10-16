@@ -81,7 +81,7 @@ result = skill.build_shopping_cart()
 
 ## Bee Track Compatibility
 
-- **Apple Watch + Bee**: Fully supported (explicitly listed in Devpost rules: *"a Bee device or an Apple Watch running Bee software"*)
+- **Apple Watch + Bee**: Fully supported
 - **Bee Device**: Works with the wearable Bee device
 - **Access Methods**: Uses all three official Bee interfaces — CLI, MCP, and Proxy API
 
@@ -135,13 +135,6 @@ make lint
 # Auto-fix issues
 make fix
 ```
-
-## Devpost Submission Notes
-
-- **Track**: Bee Track (Wearable AI)
-- **Mini Challenges**: AWS Builder, Open Source
-- **Repo Requirements**: Calls Bee technology in code (imports `@beeai/cli`, uses proxy API, executes Alexa directives)
-- **Demo Video**: Under 3 minutes showing live Bee data usage
 
 ## License
 
