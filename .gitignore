@@ -1,0 +1,29 @@
+# Virtual environment
+.venv/
+
+# Build artifacts
+shopbee.egg-info/
+dist/
+build/
+*.egg
+
+# Byte-compiled / optimized / compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Pytest cache
+.pytest_cache/
+
+# Environment variables (keep .env.example)
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

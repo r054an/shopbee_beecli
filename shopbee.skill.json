@@ -1,0 +1,40 @@
+{
+  "name": "shopbee",
+  "displayName": "ShopBee",
+  "description": "You said you needed it. Bee remembers.",
+  "version": "1.0.0",
+  "skillType": "agent-skill",
+  "author": "Roshan Ramesh",
+  "license": "MIT",
+  "entryPoint": "./shopbee/skill.py:ShopBeeSkill",
+  "capabilities": [
+    {
+      "name": "find_pending_shopping",
+      "description": "Find items the user mentioned needing but hasn't bought yet"
+    },
+    {
+      "name": "add_to_cart",
+      "description": "Add a product to Amazon shopping cart via Alexa Shopping Actions"
+    },
+    {
+      "name": "search_and_add",
+      "description": "Search for a product and add it to cart in one step"
+    }
+  ],
+  "beeIntegration": {
+    "dataSources": [
+      "conversations",
+      "todos",
+      "facts",
+      "dailySummaries"
+    ],
+    "accessMethod": ["cli", "mcp", "proxy"],
+    "appleWatchCompatible": true,
+    "beeDeviceCompatible": true
+  },
+  "amazonIntegration": {
+    "productLookup": "web_scrape_and_api",
+    "shoppingAction": "AMAZON.AddToShoppingCart",
+    "actionType": "Alexa.Shopping"
+  }
+}

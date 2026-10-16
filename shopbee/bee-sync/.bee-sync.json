@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "env": "prod",
+  "account": "872b88650e9a724c",
+  "cursors": {
+    "daily": "v1-1790960343485",
+    "conversations": "v1-1790960343737"
+  },
+  "pending": {
+    "daily": [],
+    "conversations": []
+  },
+  "lastFullSyncAtMs": 1790960131350,
+  "lastSyncAtMs": 1790960945168
+}
