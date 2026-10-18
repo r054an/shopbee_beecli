@@ -120,7 +120,8 @@ class AmazonLookup:
         for result_div in soup.find_all("div", {"data-component-type": "s-search-result"}):
             try:
                 # Extract ASIN
-                asin = result_div.get("data-asin")
+                raw_asin = result_div.get("data-asin")
+                asin = str(raw_asin) if raw_asin else None
                 if not asin:
                     continue
 
