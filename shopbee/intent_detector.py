@@ -1,8 +1,12 @@
 """Intent detection for ShopBee — identifies shopping mentions in Bee conversations."""
 
+from __future__ import annotations
+
+import logging
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -63,23 +67,32 @@ PRODUCT_CATEGORIES = {
 class IntentDetector:
     """Detects shopping intent from Bee conversation data."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._compiled_patterns = [re.compile(p, re.IGNORECASE) for p in SHOPPING_PATTERNS]
+        logger.debug("IntentDetector initialized with %d compiled patterns", len(self._compiled_patterns))
 
     def analyze_conversation(self, transcript: str) -> list[ShoppingMention]:
         """Analyze a conversation transcript and return detected shopping mentions."""
+        if not transcript or not transcript.strip():
+            logger.debug("analyze_conversation: empty transcript")
+            return []
+
+        logger.debug("Analyzing conversation (len=%d): %.100s...", len(transcript), transcript)
         mentions = []
-        product_name = ""  # Initialize so it's available in the fallback block
 
         # Check each pattern against the full transcript
         for i, pattern in enumerate(self._compiled_patterns):
             matches = pattern.findall(transcript)
+            if matches:
+                logger.debug("Pattern %d matched %d times", i + 1, len(matches))
             for match in matches:
                 product_name = self._clean_product_name(match.strip())
                 if len(product_name) > 2 and not self._is_stop_word(product_name):
+                    confidence = self._calculate_confidence(transcript, product_name)
+                    logger.debug("Found mention: %r (confidence=%.2f)", product_name, confidence)
                     mentions.append(ShoppingMention(
                         product_name=product_name,
-                        confidence=self._calculate_confidence(transcript, product_name),
+                        confidence=confidence,
                         raw_utterance=match.strip(),
                     ))
 
@@ -88,34 +101,36 @@ class IntentDetector:
         for category, keywords in PRODUCT_CATEGORIES.items():
             for kw in keywords:
                 if kw in text_lower:
-                    # Find the context around this keyword
                     idx = text_lower.index(kw)
                     start = max(0, idx - 50)
                     end = min(len(transcript), idx + len(kw) + 50)
                     context = transcript[start:end].strip()
 
-                    # Check if there's a shopping indicator nearby
                     has_shopping_indicator = any(
                         word in text_lower[max(0, start-10):start+len(context)]
                         for word in SHOPPING_KEYWORDS
                     )
                     if has_shopping_indicator:
+                        logger.debug("Keyword match: %r -> category=%s", kw, category)
                         mentions.append(ShoppingMention(
-                            product_name=product_name or f"{category}",
+                            product_name=f"{category}",
                             confidence=0.45,  # Lower confidence for keyword-only matches
                             raw_utterance=context,
                         ))
 
-        return sorted(mentions, key=lambda m: m.confidence, reverse=True)
+        result = sorted(mentions, key=lambda m: m.confidence, reverse=True)
+        logger.debug("analyze_conversation returned %d mentions", len(result))
+        return result
 
     def analyze_conversations(self, conversations_data: list[dict]) -> list[ShoppingMention]:
         """Analyze multiple Bee conversations and return shopping mentions."""
+        logger.debug("Analyzing %d conversations for shopping intent", len(conversations_data))
         all_mentions = []
 
         for conv in conversations_data:
-            # Extract transcript from conversation data
             transcript = self._extract_transcript(conv)
             if not transcript or len(transcript.strip()) < 20:
+                logger.debug("Skipping conversation (short transcript): id=%s", conv.get("id"))
                 continue
 
             mentions = self.analyze_conversation(transcript)
@@ -124,24 +139,23 @@ class IntentDetector:
                 m.timestamp_ms = conv.get("timestamp_ms")
             all_mentions.extend(mentions)
 
-        return sorted(all_mentions, key=lambda m: m.confidence, reverse=True)
+        result = sorted(all_mentions, key=lambda m: m.confidence, reverse=True)
+        logger.debug("analyze_conversations returned %d total mentions", len(result))
+        return result
 
     def _extract_transcript(self, conversation_data: dict) -> str:
         """Extract text transcript from Bee conversation data."""
-        # Try different possible structures for conversation data
-        if "transcript" in conversation_data:
-            return conversation_data["transcript"]
-        elif "text" in conversation_data:
-            return conversation_data["text"]
-        elif "content" in conversation_data:
-            return conversation_data["content"]
+        for key in ("transcript", "text", "content"):
+            value = conversation_data.get(key)
+            if isinstance(value, str) and len(value.strip()) > 0:
+                logger.debug("Extracted transcript from '%s' field (len=%d)", key, len(value))
+                return value
 
         # Bee CLI --json returns a 'summary' field with rich content
-        if "summary" in conversation_data and conversation_data["summary"]:
-            summary = conversation_data["summary"]
-            # If it's already a string (from JSON output), use it directly
-            if isinstance(summary, str):
-                return summary
+        summary = conversation_data.get("summary")
+        if isinstance(summary, str) and len(summary.strip()) > 0:
+            logger.debug("Extracted transcript from 'summary' field (len=%d)", len(summary))
+            return summary
 
         # If it has utterances, join them
         if "utterances" in conversation_data:
@@ -151,21 +165,28 @@ class IntentDetector:
                     parts.append(u.get("text", "") or u.get("content", ""))
                 elif isinstance(u, str):
                     parts.append(u)
-            return " ".join(parts)
+            result = " ".join(parts)
+            if len(result.strip()) > 0:
+                logger.debug("Extracted transcript from 'utterances' (len=%d)", len(result))
+                return result
 
         # Fallback: convert to string
         import json
         try:
-            return json.dumps(conversation_data)
-        except Exception:
+            result = json.dumps(conversation_data)
+            logger.debug("Fallback: extracted transcript via json.dumps (len=%d)", len(result))
+            return result
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.warning("json.dumps failed, using str fallback: %s", e)
             return str(conversation_data)
 
     def _clean_product_name(self, name: str) -> str:
         """Clean up a detected product name."""
-        # Remove leading articles and common prefixes
+        original = name
         name = re.sub(r"^(a|an|the)\s+", "", name.strip())
-        # Clean up extra whitespace
         name = " ".join(name.split())
+        if original != name:
+            logger.debug("Cleaned product name: %r -> %r", original, name)
         return name
 
     def _calculate_confidence(self, transcript: str, product_name: str) -> float:
@@ -175,26 +196,29 @@ class IntentDetector:
         stronger evidence that the utterance contains shopping intent.
         """
         text_lower = transcript.lower()
-        product_lower = product_name.lower()
+        words = product_name.split()
 
-        # Base confidence from pattern match quality
         base = 0.6
+        boosts = []
 
-        # Boost if the product name appears with strong shopping indicators
         for keyword in ["need", "buy", "order", "purchase", "get"]:
             if keyword in text_lower:
                 base += 0.15
+                boosts.append(f"+{keyword}")
 
-        # Boost if it's a specific product (not just a category)
-        words = product_name.split()
-        if len(words) >= 2 and any(w[0].isupper() or w.isalpha() for w in words):
+        has_uppercase = any(w[0].isupper() for w in words)
+        is_multi_word = len(words) >= 2
+        if has_uppercase or is_multi_word:
             base += 0.1
+            boosts.append("+multi-word/uppercase")
 
-        # Check for price/quantity indicators nearby
         if re.search(r"\$\d+|price|cost|expensive|cheap|budget", text_lower):
             base += 0.15
+            boosts.append("+price-indicator")
 
-        return min(base, 0.95)
+        result = min(base, 0.95)
+        logger.debug("Confidence for %r: %.2f (base=0.6%s)", product_name, result, "".join(boosts))
+        return result
 
     def _is_stop_word(self, name: str) -> bool:
         """Check if a detected product name is just a stop word."""
@@ -204,26 +228,24 @@ class IntentDetector:
     def get_pending_shopping_items(self, todos_data: list[dict] | None = None) -> list[ShoppingMention]:
         """Cross-reference shopping mentions with pending todos to find unfulfilled items."""
         if not todos_data:
+            logger.debug("get_pending_shopping_items: no todos data provided")
             return []
 
         pending_todos = [t for t in todos_data if not t.get("completed", False)]
-        
-        # Use cleaned_text if available (without Amazon links), otherwise use raw text
-        todo_texts = " ".join(t.get("cleaned_text", t.get("text", "")) for t in pending_todos).lower()
+        logger.debug("Found %d pending todos out of %d total", len(pending_todos), len(todos_data))
 
         mentions = []
         for todo in pending_todos:
-            # Prefer cleaned text, fall back to raw text
             clean_text = todo.get("cleaned_text", todo.get("text", "")).lower()
             
-            # Check if this todo matches a shopping pattern
             has_shopping_keyword = any(kw in clean_text for kw in ["buy", "purchase", "order", "get", "need"])
             has_product_category = any(
                 cat in clean_text
-                for cat in PRODUCT_CATEGORIES.keys()
+                for cat in PRODUCT_CATEGORIES
             )
 
             if has_shopping_keyword or has_product_category:
+                logger.debug("Todo %d matches shopping pattern: %r", todo.get('id'), todo.get('text', '')[:50])
                 mentions.append(ShoppingMention(
                     product_name=todo.get("cleaned_text", todo.get("text", "")),
                     confidence=0.75,  # Higher confidence from explicit todo
@@ -231,4 +253,40 @@ class IntentDetector:
                     context={"source": "pending_todo"},
                 ))
 
+        logger.debug("get_pending_shopping_items returned %d items", len(mentions))
         return sorted(mentions, key=lambda m: m.confidence, reverse=True)
+
+    def is_shopping_utterance(self, text: str) -> bool:
+        """Check if a given utterance contains shopping intent.
+        
+        Args:
+            text: The utterance to check.
+            
+        Returns:
+            True if the utterance appears to contain shopping intent.
+        """
+        mentions = self.analyze_conversation(text)
+        result = len(mentions) > 0 and mentions[0].confidence >= 0.4
+        logger.debug("is_shopping_utterance(%r) -> %s (top confidence=%.2f)", text, result, mentions[0].confidence if mentions else 0)
+        return result
+
+    def detect_intent(self, text: str) -> ShoppingMention:
+        """Detect the primary shopping intent from an utterance.
+        
+        Args:
+            text: The utterance to analyze.
+            
+        Returns:
+            The highest-confidence ShoppingMention found in the text.
+        """
+        mentions = self.analyze_conversation(text)
+        if mentions:
+            logger.debug("detect_intent(%r) -> %r (confidence=%.2f)", text, mentions[0].product_name, mentions[0].confidence)
+            return mentions[0]
+        result = ShoppingMention(
+            product_name=text.strip(),
+            confidence=0.4,
+            raw_utterance=text.strip(),
+        )
+        logger.debug("detect_intent(%r) -> fallback: %r", text, result.product_name)
+        return result

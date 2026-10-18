@@ -1,7 +1,11 @@
 """ShopBee configuration — centralized constants for URLs, timeouts, and settings."""
 
+from __future__ import annotations
+
+import logging
 from dataclasses import dataclass
 
+logger = logging.getLogger(__name__)
 
 # ── Bee Proxy ───────────────────────────────────────────────────────────
 
@@ -109,6 +113,64 @@ def bee_api_url(path: str) -> str:
         A string like ``http://127.0.0.1:8787/v1/conversations``.
     """
     return f"{BEES_PROXY_URL}{path}"
+
+
+# ── ASIN Inference ──────────────────────────────────────────────────────
+
+
+def infer_asin(product_name: str) -> str:
+    """Generate a deterministic ASIN-like identifier from a product name.
+
+    Uses MD5 hashing to produce consistent results for the same input,
+    ensuring that deduplication works reliably across calls.
+
+    Args:
+        product_name: The product name to convert into an ASIN-like string.
+
+    Returns:
+        A 10-character uppercase alphanumeric string resembling an Amazon ASIN.
+    """
+    import hashlib
+    h = hashlib.md5(product_name.encode()).hexdigest()[:10].upper()
+    # Ensure first character is always a letter (Amazon ASINs start with A-Z)
+    first = h[0]
+    if first.isdigit():
+        first = chr(ord('A') + int(first))  # '0' -> 'A', '1' -> 'B', etc.
+    result = f"{first}{h[1:9]}{h[9]}"
+    logger.debug("infer_asin(%r) -> %s", product_name, result)
+    return result
+
+
+def setup_logging(level: int | None = None) -> logging.Logger:
+    """Configure ShopBee's root logger.
+
+    Call this early in your application to enable structured logging output.
+    If no level is provided, defaults to INFO when running as a script, DEBUG otherwise.
+
+    Args:
+        level: Logging level (e.g., logging.DEBUG, logging.INFO). Defaults to None.
+
+    Returns:
+        The configured logger instance.
+    """
+    if level is None:
+        import sys
+        level = logging.DEBUG if len(sys.argv) > 1 and "-v" in sys.argv else logging.INFO
+
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter(
+        "%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    handler.setFormatter(formatter)
+
+    shopbee_logger = logging.getLogger("shopbee")
+    shopbee_logger.setLevel(level)
+    if not shopbee_logger.handlers:
+        shopbee_logger.addHandler(handler)
+
+    logger.debug("Logging configured at level %s", logging.getLevelName(level))
+    return shopbee_logger
 
 
 # ── Shared Instance ─────────────────────────────────────────────────────

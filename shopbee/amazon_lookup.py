@@ -1,19 +1,26 @@
 """Amazon product lookup — finds products by name and resolves ASINs."""
+from __future__ import annotations
 
 import json
+import logging
 import re
+import subprocess
 from dataclasses import dataclass
-from datetime import datetime
-from bs4 import BeautifulSoup
+
+logger = logging.getLogger(__name__)
+
+
+# Optional dependencies — imported at module level for consistency with other imports.
+import requests  # type: ignore[import-untyped]
+from bs4 import BeautifulSoup  # type: ignore[import-untyped]
 
 from .config import (
-    AMAZON_SEARCH_URL,
-    AMAZON_PRODUCT_DETAIL_TEMPLATE,
     BEE_CLI_PACKAGE,
     CONVERSATIONS_TIMEOUT,
     PRODUCT_LOOKUP_TIMEOUT,
-    amazon_search_url,
     amazon_product_url,
+    amazon_search_url,
+    infer_asin,
 )
 
 
@@ -35,6 +42,7 @@ class AmazonLookup:
 
     def __init__(self) -> None:
         self._asin_cache: dict[str, AmazonProduct] = {}
+        logger.debug("AmazonLookup initialized")
 
     def search(self, query: str, limit: int = 5) -> list[AmazonProduct]:
         """Search Amazon for a product by name.
@@ -42,46 +50,43 @@ class AmazonLookup:
         Uses the Amazon search page to find products matching the query.
         Falls back to direct ASIN lookup if the query looks like an ASIN.
         """
-        # Check cache first
         cache_key = f"{query}:{limit}"
         if cache_key in self._asin_cache:
+            logger.debug("Cache hit for %r -> %s", query, self._asin_cache[cache_key].title)
             return [self._asin_cache[cache_key]]
 
-        # If it looks like an ASIN (10 chars, alphanumeric + hyphens)
-        asin_match = re.match(r'^([A-Z0-9]{10})$', query.strip())
+        asin_match = re.match(r'^([A-Z0-9]{10})$', query.strip().upper())
         if asin_match:
+            logger.debug("Query %r looks like ASIN, doing direct lookup", query)
             return self._lookup_asin(asin_match.group(1))
 
-        # Search Amazon
         products = self._search_amazon(query, limit)
-
-        # Cache results
-        for p in products[:limit]:
-            self._asin_cache[cache_key] = p
-
+        # Cache the best match (first product) under this key for future lookups.
+        if products:
+            self._asin_cache[cache_key] = products[0]
+        logger.debug("search(%r, limit=%d) -> %d results", query, limit, len(products))
         return products
 
     def _search_amazon(self, query: str, limit: int = 5) -> list[AmazonProduct]:
         """Search Amazon's search page and extract product data."""
-        import subprocess
-        import os
-
         # Use the bee CLI to get conversation context if available,
         # then use it as additional context for searching
         try:
             result = subprocess.run(
                 ["npx", BEE_CLI_PACKAGE, "conversations", "list"],
                 capture_output=True, text=True, timeout=CONVERSATIONS_TIMEOUT,
+                check=False,
             )
             conv_data = json.loads(result.stdout) if result.returncode == 0 else []
         except (subprocess.TimeoutExpired, json.JSONDecodeError):
+            logger.debug("Failed to get Bee conversation context via CLI")
             conv_data = []
 
         # Build search query with context from Bee conversations
         search_query = self._build_search_query(query, conv_data)
+        logger.debug("Searching Amazon for %r (query: %r)", query, search_query)
 
         # Use Amazon's search URL to find products
-        import requests
         url = f"{amazon_search_url(query)}&ref=nb_sb_noss"
 
         headers = {
@@ -94,12 +99,14 @@ class AmazonLookup:
         try:
             response = requests.get(url, headers=headers, timeout=PRODUCT_LOOKUP_TIMEOUT)
             products = self._parse_amazon_results(response.text, query)
+            logger.debug("_search_amazon(%r) -> %d products", query, len(products))
             return products[:limit]
-        except Exception as e:
+        except (requests.RequestException, ValueError) as e:
             # Fallback: return a basic product entry
+            logger.warning("Amazon search failed for %r: %s — using fallback", query, e)
             return [AmazonProduct(
                 title=f"{query} on Amazon",
-                asin=self._infer_asin(query),
+                asin=infer_asin(query),
                 url=amazon_search_url(query),
                 source="web_scrape_fallback",
             )]
@@ -145,7 +152,6 @@ class AmazonLookup:
 
                 # Extract Rating/Reviews (optional)
                 rating = None
-                review_count = None
                 rating_tag = result_div.find("span", class_="a-icon-alt")
                 if rating_tag:
                     rating_text = rating_tag.get_text()
@@ -163,9 +169,10 @@ class AmazonLookup:
                     source="web_scrape",
                 ))
 
-            except Exception:
+            except (KeyError, AttributeError):
                 continue  # Skip malformed product blocks
 
+        logger.debug("_parse_amazon_results(%r) -> %d products", query, len(products))
         return products[:10]
 
     def _lookup_asin(self, asin: str) -> list[AmazonProduct]:
@@ -178,7 +185,6 @@ class AmazonLookup:
         )
 
         try:
-            import requests
             response = requests.get(
                 amazon_product_url(asin),
                 headers={
@@ -198,17 +204,10 @@ class AmazonLookup:
             elif soup.title:
                 product.title = soup.title.get_text().strip()
 
-        except Exception:
+        except (requests.RequestException, ValueError):
             pass
 
         return [product]
-
-    def _infer_asin(self, query: str) -> str:
-        """Infer an ASIN from a product name (for fallback cases)."""
-        # Simple hash-based ASIN generation for demo purposes
-        import hashlib
-        h = hashlib.md5(query.encode()).hexdigest()[:10].upper()
-        return f"{h[0]}{h[1:9]}{h[9]}"
 
     def _build_search_query(self, query: str, conv_data: list) -> str:
         """Build an optimized search query using Bee conversation context."""
@@ -225,7 +224,9 @@ class AmazonLookup:
             common_words = words.intersection(set(all_text.split()))
 
             if len(common_words) > 2:
-                return f"{query} {', '.join(common_words)}"
+                result = f"{query} {', '.join(common_words)}"
+                logger.debug("Refined search query: %r -> %r", query, result)
+                return result
 
         return query
 

@@ -6,23 +6,26 @@
 
 A **Bee Skill** for Amazon Shopping that detects shopping intent from your conversations and adds items to your cart via Alexa Shopping Actions.
 
+## Features
+
+- 🛒 Detects shopping mentions in Bee conversations using regex patterns and keyword matching
+- 🔍 Looks up products on Amazon with ASIN resolution
+- ✅ Creates confirmation prompts before adding to cart
+- 📱 Works with both Bee device and Apple Watch running Bee software
+- 🔄 Three integration interfaces: CLI, MCP, and Proxy API
+
 ## How It Works
 
-1. **Capture**: When you naturally say something like *"I need a USB-C cable"* in conversation, ShopBee captures it
-2. **Remember**: The mention is stored with context (conversation ID, timestamp, confidence score)
-3. **Recall**: Ask *"What did I say I needed?"* and ShopBee finds the product on Amazon
-4. **Act**: Confirm and add to your shopping cart via `AMAZON.AddToShoppingCart`
+1. **Capture** — When you say *"I need a USB-C cable"* in conversation, ShopBee captures the mention
+2. **Remember** — The item is stored with context (conversation ID, timestamp, confidence score)
+3. **Recall** — Ask *"What did I say I needed?"* and ShopBee finds it on Amazon
+4. **Act** — Confirm and add to your shopping cart via `AMAZON.AddToShoppingCart`
 
 ## Installation
 
 ```bash
-# Install dependencies
 pip install -e .
-
-# Authenticate with Bee (if not already done)
 npx @beeai/cli login
-
-# Start the bee proxy for local API access
 npx @beeai/cli proxy
 ```
 
@@ -31,35 +34,12 @@ npx @beeai/cli proxy
 ### Command Line
 
 ```bash
-# Find pending shopping items
-shopbee pending
-
-# Add a product to cart
-shopbee add "USB-C cable"
-
-# Search and add in one step
-shopbee search "mechanical keyboard"
-
-# Build complete shopping cart from all sources
-shopbee cart
-```
-
-### Using the Shell Script
-
-```bash
-./run.sh pending
-./run.sh add "USB-C cable"
-./run.sh search "mechanical keyboard"
-./run.sh cart
-```
-
-### Using Make
-
-```bash
-make pending
-make add PRODUCT="USB-C cable"
-make search QUERY="mechanical keyboard"
-make cart
+shopbee pending          # Find items you mentioned needing
+shopbee add "USB-C cable"   # Add product to cart
+shopbee search "keyboard"    # Search and add in one step
+shopbee cart               # Build complete shopping cart from all sources
+shopbee version            # Show current version
+shopbee update             # Update to latest version
 ```
 
 ### Programmatic Usage
@@ -68,76 +48,67 @@ make cart
 from shopbee import ShopBeeSkill
 
 skill = ShopBeeSkill()
-
-# Find what you mentioned needing
-result = skill.find_pending_shopping()
-print(result.message)  # Lists items with Amazon links
-
-# Add to cart
+result = skill.find_pending_shopping()  # Lists items with Amazon links
 result = skill.add_to_cart("USB-C cable")
-
-# Search and add in one step
 result = skill.search_and_add("mechanical keyboard")
-
-# Build complete shopping cart
-result = skill.build_shopping_cart()
+result = skill.build_shopping_cart()    # Complete cart from all sources
 ```
 
-## Bee Track Compatibility
+## Bee Integration
 
-- **Apple Watch + Bee**: Fully supported
-- **Bee Device**: Works with the wearable Bee device
-- **Access Methods**: Uses all three official Bee interfaces — CLI, MCP, and Proxy API
+ShopBee integrates with [Bee](https://github.com/melvinlsl/Bee) through three interfaces — CLI, MCP, and Proxy API — ensuring it works regardless of how you run Bee.
 
-## Amazon Integration
+### Configuration Example
 
-- **Product Lookup**: Web scraping + Product Advertising API fallback
-- **Shopping Action**: `AMAZON.AddToShoppingCart` (official Alexa directive)
-- **Namespace**: `Alexa.Shopping`
-- **Payload Version**: 3
+Add ShopBee to your `bee.json`:
+
+```json
+{
+  "skills": {
+    "shopbee": {
+      "enabled": true,
+      "type": "skill",
+      "description": "Detects shopping intent from conversations and adds items to Amazon cart via Alexa Shopping Actions.",
+      "invoke": ["shopbee pending"],
+      "fallback_invoke": ["npx @beeai/cli execute --directive '{\"directive\":{\"header\":{\"namespace\":\"Alexa.Shopping\",\"name\":\"AddToShoppingCart\",\"payloadVersion\":3},\"payload\":{\"products\":[{\"asin\":\"B09V3KXJP2\",\"quantity\":1,\"title\":\"USB-C Cable\"}],\"shoppingListName\":\"Default\"}}}'"],
+      "config": {
+        "bee_proxy_url": "http://127.0.0.1:8787",
+        "amazon_search_url": "https://www.amazon.com/s?k={query}",
+        "conversations_timeout": 15,
+        "product_lookup_timeout": 10
+      }
+    }
+  }
+}
+```
+
+## Architecture
+
+ShopBee consists of four components:
+
+- **IntentDetector** — Analyzes conversation transcripts using regex patterns and keyword matching to identify shopping mentions with confidence scores.
+- **AmazonLookup** — Searches Amazon's search page via HTTP requests, parses HTML results, and resolves ASINs for products.
+- **ShoppingActions** — Handles Alexa Shopping Actions by building and executing the `AMAZON.AddToShoppingCart` directive through Bee CLI.
+- **ShopBeeSkill** — Orchestrates all components to provide a unified shopping experience with deduplication via deterministic ASIN hashing.
 
 ## Project Structure
 
 ```
 shopbee/
-├── skill.py              # Main ShopBeeSkill class — core entry point
+├── skill.py              # Main ShopBeeSkill class and CLI entry point
 ├── intent_detector.py    # Shopping intent detection from conversations
 ├── amazon_lookup.py      # Amazon product search and ASIN resolution
 ├── shopping_actions.py   # Alexa Shopping Actions (AMAZON.AddToShoppingCart)
 └── config.py             # Configuration constants for URLs, timeouts, etc.
 ```
 
-## Architecture
-
-ShopBee is organized into four main components:
-
-1. **IntentDetector** — Analyzes conversation transcripts using regex patterns and keyword matching to identify shopping mentions with confidence scores
-2. **AmazonLookup** — Searches Amazon's search page via HTTP requests, parses HTML results, and resolves ASINs for products
-3. **ShoppingActions** — Handles Alexa Shopping Actions by building and executing the `AMAZON.AddToShoppingCart` directive through Bee CLI
-4. **ShopBeeSkill** — Orchestrates all components to provide a unified shopping experience
-
-## Configuration
-
-All URLs, timeouts, and constants are centralized in `shopbee/config.py`:
-
-- **Bee Proxy URL**: Configurable via environment variable or directly in config
-- **Amazon URLs**: Search, product detail, and wishlist templates
-- **Timeouts**: Named constants for conversation (15s), request (5s), and product lookup (10s) timeouts
-
 ## Development
 
 ```bash
-# Install dev dependencies
-make install
-
-# Run tests
-make test
-
-# Check code style
-make lint
-
-# Auto-fix issues
-make fix
+make install    # Install dev dependencies
+make test       # Run tests (40 tests)
+make lint       # Check code style
+make fix        # Auto-fix issues
 ```
 
 ## License

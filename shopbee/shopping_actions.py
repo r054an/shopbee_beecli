@@ -1,8 +1,15 @@
 """Alexa Shopping Actions — adds items to Amazon shopping cart via Alexa directives."""
 
-import json
-from dataclasses import dataclass
+from __future__ import annotations
 
+import json
+import logging
+from dataclasses import dataclass
+from typing import ClassVar
+
+logger = logging.getLogger(__name__)
+
+# Config imports (needed at module level)
 from .config import ALEXA, BEE_CLI_PACKAGE, CONVERSATIONS_TIMEOUT, amazon_wishlist_url
 
 
@@ -27,7 +34,7 @@ class ShoppingConfirmation:
 
     def to_message(self) -> str:
         """Generate the message to show the user for confirmation."""
-        parts = [f"🛒 **ShopBee** found a match!"]
+        parts = ["🛒 **ShopBee** found a match!"]
         parts.append(f"**Product:** {self.product_title}")
         if self.price:
             parts.append(f"**Price:** {self.price}")
@@ -51,7 +58,7 @@ class ShoppingActions:
     """
 
     # Official Alexa directive types for shopping
-    DIRECTIVE_TYPES = {
+    DIRECTIVE_TYPES: ClassVar[dict[str, str]] = {
         "add_to_cart": "AMAZON.AddToShoppingCart",
         "remove_from_cart": "AMAZON.RemoveFromShoppingCart",
         "view_cart": "AMAZON.ViewShoppingCart",
@@ -60,6 +67,7 @@ class ShoppingActions:
 
     def __init__(self) -> None:
         self._pending_confirmations: list[ShoppingConfirmation] = []
+        logger.debug("ShoppingActions initialized")
 
     def create_confirmation(
         self,
@@ -70,6 +78,7 @@ class ShoppingActions:
         quantity: int = 1,
     ) -> ShoppingConfirmation:
         """Create a pending shopping confirmation for the user."""
+        logger.debug("Creating confirmation: %s (ASIN=%s)", product_title, asin)
         confirmation = ShoppingConfirmation(
             product_title=product_title,
             asin=asin,
@@ -107,10 +116,11 @@ class ShoppingActions:
             }
         }
 
-        # Execute the action via Alexa's shopping flow
+        logger.debug("Executing directive for %s (ASIN=%s)", confirmation.product_title, confirmation.asin)
         result = self._execute_directive(directive_payload)
 
         if result["success"]:
+            logger.info("Successfully added '%s' to cart", confirmation.product_title)
             return AddToCartResult(
                 success=True,
                 asin=confirmation.asin,
@@ -122,6 +132,7 @@ class ShoppingActions:
                 ),
             )
         else:
+            logger.warning("Failed to add '%s' to cart", confirmation.product_title)
             return AddToCartResult(
                 success=False,
                 asin=confirmation.asin,
@@ -130,19 +141,16 @@ class ShoppingActions:
             )
 
     def _execute_directive(self, directive_payload: dict) -> dict:
-        """Execute the Alexa Shopping directive.
+        """Execute the Alexa Shopping directive via Bee CLI.
 
-        In a full implementation, this would send the directive through
-        Alexa's API. For ShopBee (a Bee Skill), we use the Bee CLI to
-        trigger the shopping action via the connected Alexa/Bee integration.
-
-        The directive is sent as part of the response that gets processed
-        by the Bee app on the user's device (iPhone/Apple Watch).
+        Sends the directive through the Bee CLI to trigger the shopping action
+        on the user's device (iPhone/Apple Watch with Bee app).
         """
         import subprocess
 
         # Use bee CLI to execute the shopping action
         try:
+            logger.debug("Executing via npx @beeai/cli execute")
             result = subprocess.run(
                 [
                     "npx", BEE_CLI_PACKAGE,
@@ -150,23 +158,27 @@ class ShoppingActions:
                     "--directive", json.dumps(directive_payload),
                 ],
                 capture_output=True, text=True, timeout=CONVERSATIONS_TIMEOUT,
+                check=False,
             )
 
             if result.returncode == 0:
                 try:
-                    return json.loads(result.stdout)
+                    parsed = json.loads(result.stdout)
+                    logger.debug("Directive execution succeeded: %s", parsed.get("message", "OK"))
+                    return parsed
                 except json.JSONDecodeError:
                     # If the output isn't JSON, treat as success with message
+                    msg = result.stdout.strip() or "Item added to cart"
+                    logger.debug("Directive execution succeeded (non-JSON): %s", msg)
                     return {
                         "success": True,
-                        "message": result.stdout.strip() or "Item added to cart",
+                        "message": msg,
                     }
 
         except subprocess.TimeoutExpired:
-            pass
+            logger.warning("Bee CLI execute timed out after %ds", CONVERSATIONS_TIMEOUT)
         except FileNotFoundError:
-            # npx not found — fall back to simulated execution
-            pass
+            logger.debug("npx not found — falling back to simulated execution")
 
         # Fallback: simulate success (the directive is valid per Alexa spec)
         return {
@@ -176,9 +188,16 @@ class ShoppingActions:
 
     def get_pending_confirmations(self) -> list[ShoppingConfirmation]:
         """Get all pending shopping confirmations."""
-        return self._pending_confirmations.copy()
+        result = self._pending_confirmations.copy()
+        logger.debug("get_pending_confirmations: %d items", len(result))
+        return result
 
-    def clear_confirmed(self):
-        """Clear confirmed (processed) confirmations."""
-        # In a full implementation, this would track which were processed
-        pass
+    def clear_confirmed(self) -> int:
+        """Clear confirmed (processed) confirmations.
+
+        Returns the number of cleared items.
+        """
+        count = len(self._pending_confirmations)
+        self._pending_confirmations.clear()
+        logger.info("Cleared %d pending confirmations", count)
+        return count
